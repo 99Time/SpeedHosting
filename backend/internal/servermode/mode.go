@@ -4,6 +4,7 @@ import "strings"
 
 const (
 	Public      = "public"
+	Training    = "training"
 	Competitive = "competitive"
 )
 
@@ -20,6 +21,8 @@ func Resolve(input string, legacyIsPublic *bool) Resolution {
 	switch normalized {
 	case Public:
 		return Resolution{Input: trimmed, Normalized: Public, Reason: "explicit_public"}
+	case Training:
+		return Resolution{Input: trimmed, Normalized: Training, Reason: "explicit_training"}
 	case Competitive:
 		return Resolution{Input: trimmed, Normalized: Competitive, Reason: "explicit_competitive"}
 	case "":

@@ -289,6 +289,46 @@ func TestReportMatchPublicModeSkipsOfficialProgressionAndPersistence(t *testing.
 	}
 }
 
+func TestReportMatchTrainingModeSkipsOfficialProgressionAndPersistence(t *testing.T) {
+	ctx := context.Background()
+	database := openPuckTestDB(t)
+	service := NewService(database, nil, nil)
+
+	payload := json.RawMessage(`{
+		"serverMode": "training",
+		"serverName": "Training Arena",
+		"players": [
+			{
+				"steamId": "76561190000000071",
+				"displayName": "Learner",
+				"goals": 1,
+				"assists": 2,
+				"won": true
+			}
+		]
+	}`)
+
+	if err := service.ReportMatch(ctx, payload); err != nil {
+		t.Fatalf("report match: %v", err)
+	}
+
+	var profileCount int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM ranked_profiles WHERE steam_id = ?`, "76561190000000071").Scan(&profileCount); err != nil {
+		t.Fatalf("count training ranked profile rows: %v", err)
+	}
+	if profileCount != 0 {
+		t.Fatalf("expected training match to skip ranked profile writes, got %d rows", profileCount)
+	}
+
+	results, err := service.RecentMatchResults(ctx, 10)
+	if err != nil {
+		t.Fatalf("recent match results: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected training match to skip official result persistence, got %d results", len(results))
+	}
+}
+
 func TestLatestMatchResultIgnoresPublicRows(t *testing.T) {
 	ctx := context.Background()
 	database := openPuckTestDB(t)
@@ -301,6 +341,35 @@ func TestLatestMatchResultIgnoresPublicRows(t *testing.T) {
 		INSERT INTO ranked_match_results (server_mode, winning_team, payload_json, created_at)
 		VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
 		"public", "blue", publicPayload, "2026-04-13T10:00:00Z",
+		"competitive", "red", competitivePayload, "2026-04-13T10:05:00Z",
+	); err != nil {
+		t.Fatalf("insert ranked match results: %v", err)
+	}
+
+	result, err := service.LatestMatchResult(ctx)
+	if err != nil {
+		t.Fatalf("latest match result: %v", err)
+	}
+	if result.MatchID != 2 {
+		t.Fatalf("expected latest competitive match id 2, got %d", result.MatchID)
+	}
+	if result.ServerMode != "competitive" {
+		t.Fatalf("expected latest competitive server mode, got %q", result.ServerMode)
+	}
+}
+
+func TestLatestMatchResultIgnoresTrainingRows(t *testing.T) {
+	ctx := context.Background()
+	database := openPuckTestDB(t)
+	service := NewService(database, nil, nil)
+
+	trainingPayload := `{"matchId":1,"createdAt":"2026-04-13T10:10:00Z","serverName":"Training Arena","serverMode":"training","winningTeam":"blue","players":[{"steamId":"76561190000000081","goals":0,"assists":0,"isMvp":false}]}`
+	competitivePayload := `{"matchId":2,"createdAt":"2026-04-13T10:05:00Z","serverName":"Ranked Beta","serverMode":"competitive","winningTeam":"red","players":[{"steamId":"76561190000000082","goals":1,"assists":2,"isMvp":true}]}`
+
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO ranked_match_results (server_mode, winning_team, payload_json, created_at)
+		VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+		"training", "blue", trainingPayload, "2026-04-13T10:10:00Z",
 		"competitive", "red", competitivePayload, "2026-04-13T10:05:00Z",
 	); err != nil {
 		t.Fatalf("insert ranked match results: %v", err)

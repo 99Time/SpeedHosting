@@ -223,6 +223,33 @@ func TestApplyHostedServerConfigNormalizesPublicServerMode(t *testing.T) {
 	}
 }
 
+func TestApplyHostedServerConfigNormalizesTrainingServerMode(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "premium"})
+	currentConfig := models.ServerConfig{MaxPlayers: 10, ServerTickRate: 240, ClientTickRate: 240, ServerMode: "competitive"}
+	desiredConfig := currentConfig
+	desiredConfig.ServerMode = "training"
+	desiredConfig.IsPublic = true
+
+	payload := map[string]any{}
+	normalized, _, err := service.applyHostedServerConfig(payload, currentConfig, desiredConfig, plan, nil, nil)
+	if err != nil {
+		t.Fatalf("applyHostedServerConfig returned error: %v", err)
+	}
+	if normalized.ServerMode != "training" {
+		t.Fatalf("expected normalized server mode training, got %q", normalized.ServerMode)
+	}
+	if !normalized.IsPublic {
+		t.Fatalf("expected normalized isPublic to remain true, got false")
+	}
+	if mode, ok := payload["serverMode"].(string); !ok || mode != "training" {
+		t.Fatalf("expected payload serverMode=training, got %#v", payload["serverMode"])
+	}
+	if isPublic, ok := payload["isPublic"].(bool); !ok || !isPublic {
+		t.Fatalf("expected payload isPublic=true, got %#v", payload["isPublic"])
+	}
+}
+
 func TestApplyHostedServerConfigKeepsCurrentServerModeWhenUpdateOmitsIt(t *testing.T) {
 	service := &Service{}
 	plan := planrules.Apply(models.Plan{Code: "premium"})
@@ -309,5 +336,43 @@ func TestPrepareRuntimeServerWritesServerModePerInstance(t *testing.T) {
 	}
 	if mode, ok := payload["serverMode"].(string); !ok || mode != "public" {
 		t.Fatalf("expected rendered runtime payload serverMode=public, got %#v", payload["serverMode"])
+	}
+}
+
+func TestPrepareRuntimeServerWritesTrainingServerModePerInstance(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	templatePath := filepath.Join(tempDir, "server_template.json")
+	template := map[string]any{
+		"name":            "Template",
+		"maxPlayers":      10,
+		"serverTickRate":  120,
+		"clientTickRate":  120,
+		"targetFrameRate": 120,
+		"isPublic":        false,
+	}
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	if err := os.WriteFile(templatePath, templateJSON, 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	service := &Service{cfg: config.Config{PuckConfigDir: tempDir, PuckTemplateConfig: templatePath, PuckServicePrefix: "puck@", PuckBasePort: 7777}}
+	plan := planrules.Apply(models.Plan{Code: "premium"})
+	spec, err := service.prepareRuntimeServer(ctx, CreateInput{Name: "Training Arena", DesiredTickRate: 120, MaxPlayers: 10, ServerMode: "training"}, plan)
+	if err != nil {
+		t.Fatalf("prepareRuntimeServer returned error: %v", err)
+	}
+	if spec.Config.ServerMode != "training" {
+		t.Fatalf("expected runtime spec server mode training, got %q", spec.Config.ServerMode)
+	}
+	payload, err := parseRuntimeConfig(spec.ConfigJSON)
+	if err != nil {
+		t.Fatalf("parse runtime config: %v", err)
+	}
+	if mode, ok := payload["serverMode"].(string); !ok || mode != "training" {
+		t.Fatalf("expected rendered runtime payload serverMode=training, got %#v", payload["serverMode"])
 	}
 }
