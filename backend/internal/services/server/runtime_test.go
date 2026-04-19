@@ -1,0 +1,220 @@
+package server
+
+import (
+	"errors"
+	"testing"
+
+	"speedhosting/backend/internal/config"
+	"speedhosting/backend/internal/models"
+	"speedhosting/backend/internal/planrules"
+)
+
+func TestResolveServiceNameUsesHostedPlanPrefixes(t *testing.T) {
+	service := &Service{cfg: config.Config{PuckServicePrefix: "puck@"}}
+
+	testCases := []struct {
+		name     string
+		planCode string
+		want     string
+	}{
+		{name: "free", planCode: "free", want: "puck-free@server_weekend_arena"},
+		{name: "pro", planCode: "pro", want: "puck-pro@server_weekend_arena"},
+		{name: "premium", planCode: "premium", want: "puck-premium@server_weekend_arena"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := service.resolveServiceName(testCase.planCode, "/srv/puckserver/server_weekend_arena.json", "")
+			if got != testCase.want {
+				t.Fatalf("resolveServiceName(%q) = %q, want %q", testCase.planCode, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestResolveServiceNameKeepsPersonalFallbackUntouched(t *testing.T) {
+	service := &Service{cfg: config.Config{PuckServicePrefix: "puck@"}}
+
+	if got := service.resolveServiceName("unknown", "/srv/puckserver/server_private_scrim.json", ""); got != "puck@server_private_scrim" {
+		t.Fatalf("expected personal fallback to remain on puck@, got %q", got)
+	}
+
+	if got := service.resolveServiceName("unknown", "/srv/puckserver/server_private_scrim.json", "puck@legacy-private"); got != "puck@legacy-private" {
+		t.Fatalf("expected stored personal service name to be preserved, got %q", got)
+	}
+}
+
+func TestApplyHostedServerConfigFreePlanStripsTemplateSpeedRankeds(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "free"})
+	baseMods := []models.ServerConfigMod{
+		{WorkshopID: "1111111111", Enabled: true},
+		{WorkshopID: planrules.SpeedRankedsWorkshopID, Enabled: true},
+	}
+	currentConfig := models.ServerConfig{
+		MaxPlayers:      10,
+		ServerTickRate:  120,
+		ClientTickRate:  120,
+		TargetFrameRate: 120,
+		Mods:            baseMods,
+	}
+	desiredConfig := currentConfig
+	payload := map[string]any{}
+
+	normalized, _, err := service.applyHostedServerConfig(payload, currentConfig, desiredConfig, plan, nil, baseMods)
+	if err != nil {
+		t.Fatalf("applyHostedServerConfig returned error: %v", err)
+	}
+
+	if containsWorkshopID(normalized.Mods, planrules.SpeedRankedsWorkshopID) {
+		t.Fatalf("expected free plan to strip SpeedRankeds from template mods, got %v", workshopIDs(normalized.Mods))
+	}
+
+	if !containsWorkshopID(normalized.Mods, "1111111111") {
+		t.Fatalf("expected non-restricted template mod to remain, got %v", workshopIDs(normalized.Mods))
+	}
+	if normalized.ServerTickRate != 120 || normalized.ClientTickRate != 120 {
+		t.Fatalf("expected free plan tick rates to stay at 120, got server=%d client=%d", normalized.ServerTickRate, normalized.ClientTickRate)
+	}
+	if enabled, ok := payload["speedRankedsEnabled"].(bool); !ok || enabled {
+		t.Fatalf("expected payload speedRankedsEnabled=false, got %#v", payload["speedRankedsEnabled"])
+	}
+}
+
+func TestApplyHostedServerConfigFreePlanRejectsUserMods(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "free"})
+	currentConfig := models.ServerConfig{MaxPlayers: 10, ServerTickRate: 120, ClientTickRate: 120}
+	desiredConfig := currentConfig
+	desiredConfig.Mods = []models.ServerConfigMod{{WorkshopID: "2222222222", Enabled: true}}
+
+	_, _, err := service.applyHostedServerConfig(map[string]any{}, currentConfig, desiredConfig, plan, nil, nil)
+	if !errors.Is(err, ErrPlanLimitReached) {
+		t.Fatalf("expected ErrPlanLimitReached, got %v", err)
+	}
+}
+
+func TestApplyHostedServerConfigProPlanRejectsTooManyMods(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "pro"})
+	currentConfig := models.ServerConfig{MaxPlayers: 10, ServerTickRate: 240, ClientTickRate: 240}
+	desiredConfig := currentConfig
+	desiredConfig.Mods = []models.ServerConfigMod{
+		{WorkshopID: "2222222222", Enabled: true},
+		{WorkshopID: "3333333333", Enabled: true},
+	}
+
+	_, _, err := service.applyHostedServerConfig(map[string]any{}, currentConfig, desiredConfig, plan, nil, nil)
+	if !errors.Is(err, ErrPlanLimitReached) {
+		t.Fatalf("expected ErrPlanLimitReached, got %v", err)
+	}
+}
+
+func TestApplyHostedServerConfigProPlanRejectsTooManyAdmins(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "pro"})
+	currentConfig := models.ServerConfig{MaxPlayers: 10, ServerTickRate: 240, ClientTickRate: 240}
+	desiredConfig := currentConfig
+	desiredConfig.AdminSteamIDs = []string{
+		"76561198000000001",
+		"76561198000000002",
+		"76561198000000003",
+		"76561198000000004",
+		"76561198000000005",
+		"76561198000000006",
+	}
+
+	_, _, err := service.applyHostedServerConfig(map[string]any{}, currentConfig, desiredConfig, plan, nil, nil)
+	if !errors.Is(err, ErrPlanLimitReached) {
+		t.Fatalf("expected ErrPlanLimitReached, got %v", err)
+	}
+}
+
+func TestApplyHostedServerConfigProPlanRejectsTickRateAboveLimit(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "pro"})
+	currentConfig := models.ServerConfig{MaxPlayers: 10, ServerTickRate: 240, ClientTickRate: 240}
+	desiredConfig := currentConfig
+	desiredConfig.ServerTickRate = 300
+	desiredConfig.ClientTickRate = 300
+
+	_, _, err := service.applyHostedServerConfig(map[string]any{}, currentConfig, desiredConfig, plan, nil, nil)
+	if !errors.Is(err, ErrPlanLimitReached) {
+		t.Fatalf("expected ErrPlanLimitReached, got %v", err)
+	}
+}
+
+func TestApplyHostedServerConfigPremiumPlanAllowsExpandedLimits(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "premium"})
+	currentConfig := models.ServerConfig{MaxPlayers: 10, ServerTickRate: 240, ClientTickRate: 240}
+	desiredConfig := currentConfig
+	desiredConfig.ServerTickRate = 360
+	desiredConfig.ClientTickRate = 360
+	desiredConfig.AdminSteamIDs = []string{
+		"76561198000000001",
+		"76561198000000002",
+		"76561198000000003",
+		"76561198000000004",
+	}
+	desiredConfig.Mods = []models.ServerConfigMod{
+		{WorkshopID: planrules.SpeedRankedsWorkshopID, Enabled: true},
+		{WorkshopID: "2222222222", Enabled: true},
+		{WorkshopID: "3333333333", Enabled: true},
+		{WorkshopID: "4444444444", Enabled: true},
+	}
+
+	payload := map[string]any{}
+	normalized, merge, err := service.applyHostedServerConfig(payload, currentConfig, desiredConfig, plan, nil, nil)
+	if err != nil {
+		t.Fatalf("applyHostedServerConfig returned error: %v", err)
+	}
+	if merge.DroppedDueToPlanLimit {
+		t.Fatalf("expected premium admin merge to fit within limits")
+	}
+	if normalized.ServerTickRate != 360 || normalized.ClientTickRate != 360 {
+		t.Fatalf("expected premium plan to allow 360 tick rate, got server=%d client=%d", normalized.ServerTickRate, normalized.ClientTickRate)
+	}
+	if len(normalized.AdminSteamIDs) != 4 {
+		t.Fatalf("expected 4 admin Steam IDs, got %v", normalized.AdminSteamIDs)
+	}
+	if len(normalized.Mods) != 4 {
+		t.Fatalf("expected 4 mods, got %v", workshopIDs(normalized.Mods))
+	}
+	if !containsWorkshopID(normalized.Mods, planrules.SpeedRankedsWorkshopID) {
+		t.Fatalf("expected premium plan to allow SpeedRankeds, got %v", workshopIDs(normalized.Mods))
+	}
+	if enabled, ok := payload["speedRankedsEnabled"].(bool); !ok || !enabled {
+		t.Fatalf("expected payload speedRankedsEnabled=true, got %#v", payload["speedRankedsEnabled"])
+	}
+	if mode, ok := payload["serverMode"].(string); !ok || mode != "competitive" {
+		t.Fatalf("expected payload serverMode=competitive, got %#v", payload["serverMode"])
+	}
+}
+
+func TestApplyHostedServerConfigNormalizesPublicServerMode(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "premium"})
+	currentConfig := models.ServerConfig{MaxPlayers: 10, ServerTickRate: 240, ClientTickRate: 240, ServerMode: "competitive"}
+	desiredConfig := currentConfig
+	desiredConfig.ServerMode = "public"
+	desiredConfig.IsPublic = false
+
+	payload := map[string]any{}
+	normalized, _, err := service.applyHostedServerConfig(payload, currentConfig, desiredConfig, plan, nil, nil)
+	if err != nil {
+		t.Fatalf("applyHostedServerConfig returned error: %v", err)
+	}
+	if normalized.ServerMode != "public" {
+		t.Fatalf("expected normalized server mode public, got %q", normalized.ServerMode)
+	}
+	if !normalized.IsPublic {
+		t.Fatalf("expected normalized isPublic=true when serverMode=public")
+	}
+	if mode, ok := payload["serverMode"].(string); !ok || mode != "public" {
+		t.Fatalf("expected payload serverMode=public, got %#v", payload["serverMode"])
+	}
+	if isPublic, ok := payload["isPublic"].(bool); !ok || !isPublic {
+		t.Fatalf("expected payload isPublic=true, got %#v", payload["isPublic"])
+	}
+}

@@ -1,0 +1,37 @@
+
+para buscar: 
+systemctl list-units | grep sqliteweb
+
+
+🧨 1. PARAR EL SERVICIO
+
+Primero detén el servicio:
+
+systemctl stop sqliteweb
+❌ 2. DESHABILITARLO (IMPORTANTE)
+
+Esto evita que arranque al reiniciar:
+
+systemctl disable sqliteweb
+🗑️ 3. BORRAR EL ARCHIVO DEL SERVICIO
+
+Los servicios están en:
+
+/etc/systemd/system/
+
+Borra el tuyo:
+
+rm /etc/systemd/system/sqliteweb.service
+🔄 4. RECARGAR SYSTEMD
+
+MUY IMPORTANTE:
+
+systemctl daemon-reload
+🧹 5. LIMPIAR ESTADO (RECOMENDADO)
+systemctl reset-failed
+✅ 6. COMPROBAR QUE YA NO EXISTE
+systemctl status sqliteweb
+
+Debe salir algo como:
+
+Unit sqliteweb.service could not be found

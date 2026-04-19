@@ -1,0 +1,27 @@
+1. Subes el proyecto actualizado a:
+/root/SpeedHosting
+2. Backend
+cd /root/SpeedHosting/backend
+go mod tidy
+go build -o speedhosting-api ./cmd/speedhosting-api
+chmod +x speedhosting-api
+systemctl restart speedhosting
+journalctl -u speedhosting -n 50 --no-pager
+
+
+
+3. Frontend -- npm install
+cd /root/SpeedHosting/frontend
+npm run build
+rm -rf /var/www/speedhosting
+mkdir -p /var/www/speedhosting
+cp -r /root/SpeedHosting/frontend/dist/* /var/www/speedhosting/
+chown -R www-data:www-data /var/www/speedhosting
+chmod -R 755 /var/www/speedhosting
+systemctl restart nginx
+
+
+
+4. Comprobaciones
+curl http://127.0.0.1:8081/api/v1/health
+curl http://78.46.134.88/api/v1/health

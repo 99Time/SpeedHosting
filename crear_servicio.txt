@@ -1,0 +1,36 @@
+🔧 1. Verifica que el binario existe
+cd ~/SpeedHosting/backend
+ls
+
+Debes ver algo como:
+
+speedhosting-api
+❗ Si NO existe:
+go build -o speedhosting-api ./cmd/speedhosting-api
+chmod +x speedhosting-api
+🔧 2. CREAR SERVICIO DE NUEVO
+nano /etc/systemd/system/speedhosting.service
+📄 CONTENIDO
+[Unit]
+Description=SpeedHosting API
+After=network.target
+
+[Service]
+WorkingDirectory=/root/SpeedHosting/backend
+ExecStart=/root/SpeedHosting/backend/speedhosting-api
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+🔧 3. ACTIVAR SERVICIO
+systemctl daemon-reexec
+systemctl daemon-reload
+systemctl enable speedhosting
+systemctl start speedhosting
+🔍 4. COMPROBAR
+systemctl status speedhosting
+
+Debe salir:
+
+active (running)

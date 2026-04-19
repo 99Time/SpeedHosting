@@ -1,0 +1,11 @@
+[
+  {
+    "id": "hosting-performance-upgrade-2026-04-12",
+    "title": "⚡ Hosting Performance Upgrade",
+    "short_description": "Improved server performance and stability",
+    "content": "We’ve upgraded our hosting infrastructure to deliver better performance and smoother gameplay.\n\nFree and Pro servers now run on optimized resource profiles, ensuring:\n- More stable gameplay\n- Reduced lag and slow-motion issues\n- Better CPU distribution across servers\n\nThis change improves overall reliability while keeping resource usage efficient.",
+    "tag": "Performance",
+    "created_at": "2026-04-12",
+    "icon": "⚡"
+  }
+]
