@@ -1,7 +1,11 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"speedhosting/backend/internal/config"
@@ -208,13 +212,102 @@ func TestApplyHostedServerConfigNormalizesPublicServerMode(t *testing.T) {
 	if normalized.ServerMode != "public" {
 		t.Fatalf("expected normalized server mode public, got %q", normalized.ServerMode)
 	}
-	if !normalized.IsPublic {
-		t.Fatalf("expected normalized isPublic=true when serverMode=public")
+	if normalized.IsPublic {
+		t.Fatalf("expected normalized isPublic to remain false, got true")
 	}
 	if mode, ok := payload["serverMode"].(string); !ok || mode != "public" {
 		t.Fatalf("expected payload serverMode=public, got %#v", payload["serverMode"])
 	}
-	if isPublic, ok := payload["isPublic"].(bool); !ok || !isPublic {
-		t.Fatalf("expected payload isPublic=true, got %#v", payload["isPublic"])
+	if isPublic, ok := payload["isPublic"].(bool); !ok || isPublic {
+		t.Fatalf("expected payload isPublic=false, got %#v", payload["isPublic"])
+	}
+}
+
+func TestApplyHostedServerConfigKeepsCurrentServerModeWhenUpdateOmitsIt(t *testing.T) {
+	service := &Service{}
+	plan := planrules.Apply(models.Plan{Code: "premium"})
+	currentConfig := models.ServerConfig{MaxPlayers: 10, ServerTickRate: 240, ClientTickRate: 240, ServerMode: "public", IsPublic: true}
+	desiredConfig := currentConfig
+	desiredConfig.ServerMode = ""
+	desiredConfig.IsPublic = false
+
+	payload := map[string]any{}
+	normalized, _, err := service.applyHostedServerConfig(payload, currentConfig, desiredConfig, plan, nil, nil)
+	if err != nil {
+		t.Fatalf("applyHostedServerConfig returned error: %v", err)
+	}
+	if normalized.ServerMode != "public" {
+		t.Fatalf("expected current server mode to be preserved, got %q", normalized.ServerMode)
+	}
+	if normalized.IsPublic {
+		t.Fatalf("expected isPublic=false from desired config, got true")
+	}
+	if mode, ok := payload["serverMode"].(string); !ok || mode != "public" {
+		t.Fatalf("expected payload serverMode=public, got %#v", payload["serverMode"])
+	}
+	if isPublic, ok := payload["isPublic"].(bool); !ok || isPublic {
+		t.Fatalf("expected payload isPublic=false, got %#v", payload["isPublic"])
+	}
+}
+
+func TestExtractServerConfigKeepsIsPublicIndependentFromServerMode(t *testing.T) {
+	config := extractServerConfig(map[string]any{
+		"isPublic":   true,
+		"serverMode": "competitive",
+	})
+	if !config.IsPublic {
+		t.Fatalf("expected isPublic=true to be preserved")
+	}
+	if config.ServerMode != "competitive" {
+		t.Fatalf("expected serverMode=competitive, got %q", config.ServerMode)
+	}
+
+	config = extractServerConfig(map[string]any{
+		"isPublic":   false,
+		"serverMode": "public",
+	})
+	if config.IsPublic {
+		t.Fatalf("expected isPublic=false to be preserved")
+	}
+	if config.ServerMode != "public" {
+		t.Fatalf("expected serverMode=public, got %q", config.ServerMode)
+	}
+}
+
+func TestPrepareRuntimeServerWritesServerModePerInstance(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	templatePath := filepath.Join(tempDir, "server_template.json")
+	template := map[string]any{
+		"name":            "Template",
+		"maxPlayers":      10,
+		"serverTickRate":  120,
+		"clientTickRate":  120,
+		"targetFrameRate": 120,
+		"isPublic":        true,
+	}
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	if err := os.WriteFile(templatePath, templateJSON, 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	service := &Service{cfg: config.Config{PuckConfigDir: tempDir, PuckTemplateConfig: templatePath, PuckServicePrefix: "puck@", PuckBasePort: 7777}}
+	plan := planrules.Apply(models.Plan{Code: "premium"})
+	spec, err := service.prepareRuntimeServer(ctx, CreateInput{Name: "Weekend Arena", DesiredTickRate: 120, MaxPlayers: 10, ServerMode: "public"}, plan)
+	if err != nil {
+		t.Fatalf("prepareRuntimeServer returned error: %v", err)
+	}
+	if spec.Config.ServerMode != "public" {
+		t.Fatalf("expected runtime spec server mode public, got %q", spec.Config.ServerMode)
+	}
+	payload, err := parseRuntimeConfig(spec.ConfigJSON)
+	if err != nil {
+		t.Fatalf("parse runtime config: %v", err)
+	}
+	if mode, ok := payload["serverMode"].(string); !ok || mode != "public" {
+		t.Fatalf("expected rendered runtime payload serverMode=public, got %#v", payload["serverMode"])
 	}
 }

@@ -71,6 +71,7 @@ func (s *Service) prepareRuntimeServer(ctx context.Context, input CreateInput, p
 	desiredConfig.ServerTickRate = input.DesiredTickRate
 	desiredConfig.ClientTickRate = input.DesiredTickRate
 	desiredConfig.Password = input.Password
+	desiredConfig.ServerMode = input.ServerMode
 	desiredConfig.AdminSteamIDs = append([]string(nil), input.AdminSteamIDs...)
 	desiredConfig.Mods = append([]models.ServerConfigMod(nil), input.Mods...)
 
@@ -208,14 +209,13 @@ func parseRuntimeConfig(configJSON string) (map[string]any, error) {
 
 func extractServerConfig(payload map[string]any) models.ServerConfig {
 	resolvedServerMode := resolveServerModeFromRuntimePayload(payload)
-	isPublic := resolvedServerMode == servermode.Public
 
 	return models.ServerConfig{
 		MaxPlayers:        intFromAnyOrDefault(payload["maxPlayers"], 10),
 		Password:          stringFromAny(payload["password"]),
 		VOIPEnabled:       boolFromAny(payload["voipEnabled"]),
 		AdminSteamIDs:     mergedAdminSteamIDs(payload),
-		IsPublic:          isPublic,
+		IsPublic:          boolFromAny(payload["isPublic"]),
 		ServerMode:        resolvedServerMode,
 		ReloadBannedIDs:   boolFromAny(payload["reloadBannedIDs"]),
 		UsePuckBannedIDs:  boolFromAny(payload["usePuckBannedIDs"]),
@@ -309,8 +309,8 @@ func (s *Service) applyHostedServerConfig(payload map[string]any, currentConfig 
 
 	if plan.AllowAdvancedConfig {
 		normalizedConfig.VOIPEnabled = desiredConfig.VOIPEnabled
-		normalizedConfig.ServerMode = normalizeHostedServerMode(desiredConfig)
-		normalizedConfig.IsPublic = normalizedConfig.ServerMode == servermode.Public
+		normalizedConfig.IsPublic = desiredConfig.IsPublic
+		normalizedConfig.ServerMode = normalizeHostedServerMode(currentConfig.ServerMode, desiredConfig.ServerMode)
 		normalizedConfig.ReloadBannedIDs = desiredConfig.ReloadBannedIDs
 		normalizedConfig.UsePuckBannedIDs = desiredConfig.UsePuckBannedIDs
 		normalizedConfig.PrintMetrics = desiredConfig.PrintMetrics
@@ -331,8 +331,7 @@ func (s *Service) applyHostedServerConfig(payload map[string]any, currentConfig 
 		normalizedConfig.GameOver = desiredConfig.GameOver
 	}
 
-	normalizedConfig.ServerMode = normalizeHostedServerMode(normalizedConfig)
-	normalizedConfig.IsPublic = normalizedConfig.ServerMode == servermode.Public
+	normalizedConfig.ServerMode = normalizeHostedServerMode(currentConfig.ServerMode, normalizedConfig.ServerMode)
 
 	switch planCode {
 	case "free":
@@ -535,28 +534,16 @@ func stringFromAny(value any) string {
 }
 
 func resolveServerModeFromRuntimePayload(payload map[string]any) string {
-	legacyIsPublic := legacyIsPublicFromRuntimePayload(payload)
-	resolution := servermode.Resolve(firstStringFromAny(payload["serverMode"], payload["ServerMode"], payload["server_mode"]), legacyIsPublic)
+	resolution := servermode.Resolve(firstStringFromAny(payload["serverMode"], payload["ServerMode"], payload["server_mode"]), nil)
 	return resolution.Normalized
 }
 
-func normalizeHostedServerMode(config models.ServerConfig) string {
-	legacyIsPublic := config.IsPublic
-	resolution := servermode.Resolve(config.ServerMode, &legacyIsPublic)
-	return resolution.Normalized
-}
-
-func legacyIsPublicFromRuntimePayload(payload map[string]any) *bool {
-	for _, key := range []string{"isPublic", "IsPublic", "is_public"} {
-		value, exists := payload[key]
-		if !exists {
-			continue
-		}
-		resolved := boolFromAny(value)
-		return &resolved
+func normalizeHostedServerMode(currentMode string, desiredMode string) string {
+	if strings.TrimSpace(desiredMode) == "" {
+		return servermode.Resolve(currentMode, nil).Normalized
 	}
 
-	return nil
+	return servermode.Resolve(desiredMode, nil).Normalized
 }
 
 func firstStringFromAny(values ...any) string {

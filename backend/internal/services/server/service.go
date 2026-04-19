@@ -59,6 +59,7 @@ type CreateInput struct {
 	DesiredTickRate int                           `json:"desiredTickRate"`
 	MaxPlayers      int                           `json:"maxPlayers"`
 	Password        string                        `json:"password"`
+	ServerMode      string                        `json:"serverMode,omitempty"`
 	AdminSteamIDs   []string                      `json:"adminSteamIds"`
 	Mods            []models.ServerConfigMod      `json:"mods"`
 	Attribution     models.AcquisitionAttribution `json:"acquisition"`
